@@ -60,6 +60,89 @@ class RawDataEvent:
     characteristic_uuid: str
 
 
+@dataclass
+class AxisEvent:
+    axis_index: int
+    value: int
+
+
+class AxisWidth:
+    """Mirrors bcb::AxisWidth on the ESP32 side."""
+    UINT8 = "uint8"
+    INT8 = "int8"
+    UINT16_LE = "uint16_le"
+    INT16_LE = "int16_le"
+    UINT16_BE = "uint16_be"
+    INT16_BE = "int16_be"
+
+
+@dataclass
+class AxisFieldConfig:
+    index: int
+    byte_offset: int
+    width: str  # one of AxisWidth.*
+    deadzone: int = 0
+
+
+class AnalogAxisExtractor:
+    """Mirrors bcb::AnalogAxisExtractor on the ESP32 side: explicit,
+    configured byte-offset decoding -- NOT a HID report descriptor parser.
+    Register axis fields after identifying their layout via on_raw_data()
+    inspection (move the stick/trigger, see which bytes change)."""
+
+    _WIDTH_SIZES = {
+        AxisWidth.UINT8: 1,
+        AxisWidth.INT8: 1,
+        AxisWidth.UINT16_LE: 2,
+        AxisWidth.INT16_LE: 2,
+        AxisWidth.UINT16_BE: 2,
+        AxisWidth.INT16_BE: 2,
+    }
+
+    def __init__(self):
+        self._axes: dict[int, AxisFieldConfig] = {}
+        self._last_values: dict[int, int] = {}
+
+    def configure_axis(self, config: AxisFieldConfig):
+        self._axes[config.index] = config
+        self._last_values.pop(config.index, None)
+
+    def clear_axes(self):
+        self._axes.clear()
+        self._last_values.clear()
+
+    def _decode(self, data: bytes, config: AxisFieldConfig) -> Optional[int]:
+        size = self._WIDTH_SIZES[config.width]
+        if config.byte_offset + size > len(data):
+            return None
+        chunk = data[config.byte_offset:config.byte_offset + size]
+        if config.width == AxisWidth.UINT8:
+            return chunk[0]
+        if config.width == AxisWidth.INT8:
+            return int.from_bytes(chunk, "little", signed=True)
+        if config.width == AxisWidth.UINT16_LE:
+            return int.from_bytes(chunk, "little", signed=False)
+        if config.width == AxisWidth.INT16_LE:
+            return int.from_bytes(chunk, "little", signed=True)
+        if config.width == AxisWidth.UINT16_BE:
+            return int.from_bytes(chunk, "big", signed=False)
+        if config.width == AxisWidth.INT16_BE:
+            return int.from_bytes(chunk, "big", signed=True)
+        return None
+
+    def feed(self, data: bytes):
+        events = []
+        for index, config in self._axes.items():
+            value = self._decode(data, config)
+            if value is None:
+                continue
+            last = self._last_values.get(index)
+            if last is None or abs(value - last) > config.deadzone:
+                self._last_values[index] = value
+                events.append(AxisEvent(axis_index=index, value=value))
+        return events
+
+
 class HidButtonHeuristic:
     """Same heuristic as the ESP32 library's HidButtonHeuristic: treats the
     first up-to-4 bytes of any short (<=8 byte) notification as a button
@@ -99,9 +182,11 @@ class BLEControllerBridge:
         self._on_disconnect: Optional[Callable[[], None]] = None
         self._on_scan_result: Optional[Callable[[str, str, int], None]] = None
         self._on_button: Optional[Callable[[ButtonEvent], None]] = None
+        self._on_axis: Optional[Callable[[AxisEvent], None]] = None
         self._on_raw_data: Optional[Callable[[RawDataEvent], None]] = None
 
         self._heuristic = HidButtonHeuristic()
+        self._axis_extractor = AnalogAxisExtractor()
         self._connected_device_path: Optional[str] = None
         self._signal_matches = []
 
@@ -147,6 +232,15 @@ class BLEControllerBridge:
 
     def on_button(self, fn: Callable[[ButtonEvent], None]):
         self._on_button = fn
+
+    def on_axis(self, fn: Callable[[AxisEvent], None]):
+        self._on_axis = fn
+
+    def configure_axis(self, config: AxisFieldConfig):
+        self._axis_extractor.configure_axis(config)
+
+    def clear_axes(self):
+        self._axis_extractor.clear_axes()
 
     def on_raw_data(self, fn: Callable[[RawDataEvent], None]):
         self._on_raw_data = fn
@@ -288,6 +382,9 @@ class BLEControllerBridge:
                     evt = self._heuristic.feed(raw)
                     if evt and self._on_button:
                         self._on_button(evt)
+                    for axis_evt in self._axis_extractor.feed(raw):
+                        if self._on_axis:
+                            self._on_axis(axis_evt)
                 return handler
 
             self._bus.add_signal_receiver(

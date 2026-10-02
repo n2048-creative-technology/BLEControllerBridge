@@ -51,6 +51,12 @@ the common case — never a hard allowlist you have to extend per device.
      │ scan/connect/bond │  │ subscribe-to-everything│  │ bitmask diffing    │
      │  (reusable alone) │  │   (reusable alone)     │  │  (reusable alone)   │
      └──────────────────┘  └───────────────────────┘  └────────────────────┘
+                                                          ┌────────────────────┐
+                                                          │ AnalogAxisExtractor │
+                                                          │ configured byte-    │
+                                                          │ offset axis decode  │
+                                                          │  (reusable alone)   │
+                                                          └────────────────────┘
 ```
 
 Each internal module (`esp32/src/internal/*`) is independently reusable —
@@ -180,6 +186,54 @@ controller.onRawData([](const BCBRawDataEvent& evt) {
 });
 ```
 
+### Handling analog axes (joysticks, triggers)
+
+`onButton`/`HidButtonHeuristic` is bitmask-only and has no concept of
+analog values — feeding it axis bytes produces meaningless noise. For
+joysticks and analog triggers, use `configureAxis()` + `onAxis()`
+(`AnalogAxisExtractor`) instead: register exactly where each axis lives in
+the raw report (byte offset, width/signedness, deadzone), identified from
+`onRawData()` inspection, and the library does the byte decode + change
+detection for you on every subsequent packet.
+
+```cpp
+controller.onRawData([](const BCBRawDataEvent& evt) {
+  // Bring-up step: dump raw bytes while moving the stick/pulling the
+  // trigger, note which byte(s) change and their range.
+  Serial.printf("len=%u: ", (unsigned)evt.length);
+  for (size_t i = 0; i < evt.length; i++) Serial.printf("%02X ", evt.data[i]);
+  Serial.println();
+});
+
+// Once identified -- e.g. byte 1 is a signed 8-bit left-stick X axis,
+// byte 3 is an unsigned 8-bit analog trigger:
+controller.configureAxis({/*index=*/0, /*byteOffset=*/1, bcb::AxisWidth::INT8, /*deadzone=*/2});
+controller.configureAxis({/*index=*/2, /*byteOffset=*/3, bcb::AxisWidth::UINT8, /*deadzone=*/3});
+
+controller.onAxis([](const BCBAxisEvent& evt) {
+  Serial.printf("axis %u = %ld\n", evt.axisIndex, (long)evt.value);
+  // -> map evt.value to a servo angle, motor PWM, etc.
+});
+```
+
+`AxisWidth` options: `UINT8`, `INT8`, `UINT16_LE`, `INT16_LE`,
+`UINT16_BE`, `INT16_BE` — covers the field sizes/signedness/endianness
+used by essentially all simple BLE gamepad/joystick reports. `deadzone`
+suppresses the jitter noise common on cheap analog sticks (ignores
+changes smaller than the threshold); set it to 0 for perfectly digital
+fields (e.g. a trigger you want millimeter precision on) or a few units
+for a physically wobbly stick.
+
+This is an **explicit field-offset decoder, not a HID Report Descriptor
+parser** — it won't auto-detect axis locations from the device's own
+descriptor the way Bluepad32/a full HID stack would. You tell it where the
+bytes are, once, after a short bring-up inspection step. See "Advanced:
+bypassing the facade" to use `AnalogAxisExtractor` standalone, decoupled
+from `BLEControllerBridge`, if needed.
+
+See `esp32/examples/AnalogAxes/AnalogAxes.ino` for a full runnable
+example.
+
 ### Multiple controllers
 
 This library's facade (`BLEControllerBridge`) manages one active
@@ -252,6 +306,21 @@ bridge.scan_and_connect()
 bridge.run()   # blocking -- Ctrl+C to stop
 ```
 
+### Handling analog axes (joysticks, triggers) on the Pi
+
+Mirrors the ESP32 side exactly: register byte offsets identified via
+`on_raw_data()` inspection, then consume `on_axis`.
+
+```python
+from ble_controller_bridge import BLEControllerBridge, AxisFieldConfig, AxisWidth
+
+bridge = BLEControllerBridge()
+bridge.configure_axis(AxisFieldConfig(index=0, byte_offset=1, width=AxisWidth.INT8, deadzone=2))
+bridge.configure_axis(AxisFieldConfig(index=2, byte_offset=3, width=AxisWidth.UINT8, deadzone=3))
+
+bridge.on_axis(lambda evt: print(f"axis {evt.axis_index} = {evt.value}"))
+```
+
 **Must run as root** (or with appropriate D-Bus/BlueZ policy-kit rules) —
 BlueZ's adapter control, discovery, and pairing D-Bus methods require
 privileged access by default: `sudo python3 your_script.py`.
@@ -298,6 +367,7 @@ sudo bluetoothctl
 | `onDisconnect` | `on_disconnect` | Connection dropped (any reason, incl. out-of-range) |
 | `onScanResult` | `on_scan_result` | Every advertisement seen during a scan (match or not) |
 | `onButton` | `on_button` | Heuristic button-bitmask diff (see below) |
+| `onAxis` | `on_axis` | Configured analog axis field changed beyond deadzone (see below) |
 | `onRawData` | `on_raw_data` | Every raw notification from every subscribed characteristic |
 
 ### The `onButton` heuristic — what it is and isn't

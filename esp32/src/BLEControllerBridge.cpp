@@ -48,6 +48,7 @@ void BLEControllerBridge::begin(const std::string& deviceName) {
         _onRawData(out);
       }
       _buttonHeuristic.feed(evt.data, evt.length);
+      _axisExtractor.feed(evt.data, evt.length);
     });
 
     _gattMonitor.subscribeToAll(client);
@@ -70,6 +71,15 @@ void BLEControllerBridge::begin(const std::string& deviceName) {
       out.buttonMask = evt.buttonMask;
       out.changedMask = evt.changedMask;
       _onButton(out);
+    }
+  });
+
+  _axisExtractor.setCallback([this](const bcb::AnalogAxisEvent& evt) {
+    if (_onAxis) {
+      BCBAxisEvent out;
+      out.axisIndex = evt.axisIndex;
+      out.value = evt.value;
+      _onAxis(out);
     }
   });
 }
@@ -120,6 +130,14 @@ void BLEControllerBridge::disconnect() {
 
 void BLEControllerBridge::forgetBond() {
   _transport.forgetAllBonds();
+}
+
+void BLEControllerBridge::configureAxis(const bcb::AxisFieldConfig& config) {
+  _axisExtractor.configureAxis(config);
+}
+
+void BLEControllerBridge::clearAxes() {
+  _axisExtractor.clearAxes();
 }
 
 void BLEControllerBridge::loop() {

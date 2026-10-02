@@ -52,6 +52,15 @@ void setup() {
     Serial.printf("[BUTTON] mask=0x%08X changed=0x%08X\n", evt.buttonMask, evt.changedMask);
   });
 
+  // --- Analog axes (joystick/trigger) example -----------------------
+  // Uncomment and adjust offsets/widths once you've identified them from
+  // [RAW] output above (see README "Handling analog axes"):
+  // controller.configureAxis({0, /*byteOffset=*/1, bcb::AxisWidth::INT8, /*deadzone=*/2});
+  // controller.configureAxis({1, /*byteOffset=*/2, bcb::AxisWidth::INT8, /*deadzone=*/2});
+  // controller.onAxis([](const BCBAxisEvent& evt) {
+  //   Serial.printf("[AXIS] index=%u value=%ld\n", evt.axisIndex, (long)evt.value);
+  // });
+
   controller.scanAndConnect();  // scans indefinitely until a match
 }
 

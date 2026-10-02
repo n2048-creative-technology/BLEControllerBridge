@@ -37,6 +37,7 @@
 #include "internal/BleTransport.h"
 #include "internal/GenericGattMonitor.h"
 #include "internal/HidButtonHeuristic.h"
+#include "internal/AnalogAxisExtractor.h"
 
 // --- Public event payload types -----------------------------------------
 
@@ -59,6 +60,15 @@ struct BCBRawDataEvent {
   std::string characteristicUUID;
 };
 
+/// Fired when a configured analog axis field changes beyond its deadzone.
+/// See AnalogAxisExtractor -- this requires explicit per-axis configuration
+/// via configureAxis() (byte offset/width identified from onRawData()
+/// inspection), it is NOT auto-detected from the device.
+struct BCBAxisEvent {
+  uint8_t axisIndex;
+  int32_t value;
+};
+
 enum class BCBState {
   DISCONNECTED,
   SCANNING,
@@ -69,6 +79,7 @@ enum class BCBState {
 using BCBConnectCallback    = std::function<void(const std::string& name, const std::string& address)>;
 using BCBDisconnectCallback = std::function<void()>;
 using BCBButtonCallback     = std::function<void(const BCBButtonEvent&)>;
+using BCBAxisCallback       = std::function<void(const BCBAxisEvent&)>;
 using BCBRawDataCallback    = std::function<void(const BCBRawDataEvent&)>;
 using BCBScanResultCallback = std::function<void(const std::string& name, const std::string& address, int rssi)>;
 /// Return true to accept this device and stop scanning/connect to it.
@@ -112,6 +123,17 @@ class BLEControllerBridge {
   /// action; this defeats reboot-persistence until re-paired.
   void forgetBond();
 
+  /// Registers an analog axis field (byte offset/width/deadzone) to
+  /// extract from every raw notification. Identify the offset/width by
+  /// inspecting onRawData() output while moving the stick/trigger on your
+  /// specific controller -- see README "Handling analog axes (joysticks,
+  /// triggers)". Call any time; re-registering the same axisIndex replaces
+  /// its config and resets its change-detection baseline.
+  void configureAxis(const bcb::AxisFieldConfig& config);
+
+  /// Clears all configured analog axis fields.
+  void clearAxes();
+
   /// Call every loop() iteration.
   void loop();
 
@@ -132,6 +154,10 @@ class BLEControllerBridge {
   /// only -- verify against onRawData() for your specific device.
   void onButton(BCBButtonCallback cb) { _onButton = cb; }
 
+  /// Fires when a configured analog axis field changes beyond its
+  /// deadzone (see configureAxis()). No axes fire until configured.
+  void onAxis(BCBAxisCallback cb) { _onAxis = cb; }
+
   /// Every raw notification from every subscribed characteristic.
   /// Always wire this up when bringing up a new/unknown controller.
   void onRawData(BCBRawDataCallback cb) { _onRawData = cb; }
@@ -140,6 +166,7 @@ class BLEControllerBridge {
   bcb::BleTransport _transport;
   bcb::GenericGattMonitor _gattMonitor;
   bcb::HidButtonHeuristic _buttonHeuristic;
+  bcb::AnalogAxisExtractor _axisExtractor;
 
   BCBState _state = BCBState::DISCONNECTED;
   std::string _connectedName;
@@ -152,6 +179,7 @@ class BLEControllerBridge {
   BCBDisconnectCallback _onDisconnect;
   BCBScanResultCallback _onScanResult;
   BCBButtonCallback _onButton;
+  BCBAxisCallback _onAxis;
   BCBRawDataCallback _onRawData;
 
   bool evaluateFilter(const std::string& name, const std::string& address, int rssi);
