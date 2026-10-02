@@ -234,6 +234,32 @@ from `BLEControllerBridge`, if needed.
 See `esp32/examples/AnalogAxes/AnalogAxes.ino` for a full runnable
 example.
 
+### Example: driving a Freenove 4WD Car Kit for ESP32
+
+`esp32/examples/FreenoveCarControl/FreenoveCarControl.ino` drives a
+[Freenove 4WD Car Kit for ESP32](https://github.com/Freenove/Freenove_4WD_Car_Kit_for_ESP32)
+(ESP32-WROVER-B + PCA9685 I2C motor driver) using any BLE joystick/gamepad
+via `configureAxis()`/`onAxis()` for throttle+steering and `onButton()` as
+an emergency stop — including generic no-name VR remotes with no published
+protocol (the same bring-up workflow as any other unidentified controller:
+`DiscoverAnyDevice.ino` first, fill in real byte offsets, then flash this).
+
+**Extra dependency for this example only** (the core library itself stays
+zero-dependency): the PCA9685 Arduino library (v3.0.3), bundled inside the
+Freenove kit's own repo at `Libraries/PCA9685_v3.0.3.zip` — extract into
+your Arduino `libraries/` folder. Board: `esp32:esp32:esp32wrover` ("ESP32
+Wrover Module").
+
+**Safety behavior (do not remove when adapting this example):** motors
+stop immediately on BLE disconnect, AND on a 500ms watchdog timeout if no
+controller data arrives (covers a silent link drop or a crashed controller
+app that never fires a clean disconnect event) — a remote-controlled
+vehicle that keeps driving after losing its controller is a real hazard.
+
+Verified: compiles cleanly against the real PCA9685 v3.0.3 library and
+`esp32:esp32` core v3.3.12 targeting `esp32wrover` (87% flash usage, well
+within the 1.31MB partition).
+
 ### Multiple controllers
 
 This library's facade (`BLEControllerBridge`) manages one active
