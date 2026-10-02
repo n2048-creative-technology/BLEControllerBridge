@@ -1,0 +1,14 @@
+# Arduino / ESP32 build artifacts
+.pio/
+build/
+*.bin
+*.elf
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editor
+.vscode/
+*.swp
